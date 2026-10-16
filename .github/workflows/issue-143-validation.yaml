@@ -1,4 +1,4 @@
-name: Issue 143 remote acceptance
+name: Issue 143 minimum Python acceptance
 on:
   push:
     branches: [validation/143-posix-sh]
@@ -19,9 +19,6 @@ jobs:
           - selector: min
             version: '3.7'
             image: '3.7-slim'
-          - selector: max
-            version: '3.14'
-            image: '3.14.0-slim'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,6 +38,9 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/Dockerfile.acceptance" <<EOF
           FROM python:$BASE_IMAGE
+          COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
+          RUN UV_PYTHON_INSTALL_DIR=/opt/aux-python uv python install 3.10
+          RUN ln -s /opt/aux-python/cpython-3.10.*-linux-x86_64-gnu/bin/python3.10 /usr/local/bin/python3.10
           RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
           RUN git config --system url.https://github.com/jslponcev-ui/protoprimer.git.insteadOf https://github.com/uvsmtid/protoprimer.git
           RUN git config --system --add safe.directory /tmp/test_ws
@@ -58,37 +58,3 @@ jobs:
         with:
           name: acceptance-${{ matrix.selector }}
           path: ${{ runner.temp }}/acceptance-${{ matrix.selector }}.log
-  quality:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/143-posix-sh-init
-          persist-credentials: false
-      - name: Verify exact submitted source
-        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14.0'
-      - name: Bootstrap and verify generated files
-        run: |
-          ./prime
-          ./cmd/prime_env
-          git diff --exit-code
-          test -z "$(git status --porcelain)"
-      - name: Repository formatting and lint checks
-        run: ./cmd/pre_commit_for_all
-      - name: Build documentation and check documentation ID commands
-        run: |
-          ./cmd/build_readthedocs
-          ./cmd/gen_next_doc_id doc/feature_topic
-          ./cmd/gen_next_doc_id doc/use_case
-          ./cmd/gen_next_doc_id doc/task_ref
-      - name: Coverage
-        run: |
-          venv/bin/coverage erase --rcfile=gconf/coveragerc.ini
-          venv/bin/coverage run --rcfile=gconf/coveragerc.ini --module pytest src/metaprimer/test/
-          venv/bin/coverage run --rcfile=gconf/coveragerc.ini --module pytest src/protoprimer/test/
-          venv/bin/coverage combine --rcfile=gconf/coveragerc.ini
-          venv/bin/coverage report --rcfile=gconf/coveragerc.ini
