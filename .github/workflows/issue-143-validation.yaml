@@ -1,0 +1,94 @@
+name: Issue 143 remote acceptance
+on:
+  push:
+    branches: [validation/143-posix-sh]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  TARGET_SHA: 755e1dd9719ef8dfed8ffdd37b56e4194814361d
+  CI: 'true'
+jobs:
+  docker-acceptance:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - selector: min
+            version: '3.7'
+            image: '3.7-slim'
+          - selector: max
+            version: '3.14'
+            image: '3.14.0-slim'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/143-posix-sh-init
+          persist-credentials: false
+      - name: Verify exact submitted source
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.0'
+      - name: Bootstrap the unchanged project test wrapper
+        run: ./prime --env dst/test_python_max
+      - name: Prepare Docker prerequisites and fork-aware documentation fetch
+        env:
+          BASE_IMAGE: ${{ matrix.image }}
+          PYTHON_VERSION: ${{ matrix.version }}
+        run: |
+          cat > "$RUNNER_TEMP/Dockerfile.acceptance" <<EOF
+          FROM python:$BASE_IMAGE
+          RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+          RUN git config --system url.https://github.com/jslponcev-ui/protoprimer.git.insteadOf https://github.com/uvsmtid/protoprimer.git
+          RUN git config --system --add safe.directory /tmp/test_ws
+          ENV SHELL=/bin/bash
+          EOF
+          docker build -f "$RUNNER_TEMP/Dockerfile.acceptance" -t "python:$PYTHON_VERSION-slim" "$RUNNER_TEMP"
+      - name: Run required minimum or maximum acceptance command
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          set -o pipefail
+          ./cmd/test_python_version --ci --python "$SELECTOR" 2>&1 | tee "$RUNNER_TEMP/acceptance-$SELECTOR.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-${{ matrix.selector }}
+          path: ${{ runner.temp }}/acceptance-${{ matrix.selector }}.log
+  quality:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/143-posix-sh-init
+          persist-credentials: false
+      - name: Verify exact submitted source
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.0'
+      - name: Bootstrap and verify generated files
+        run: |
+          ./prime
+          ./cmd/prime_env
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+      - name: Repository formatting and lint checks
+        run: ./cmd/pre_commit_for_all
+      - name: Build documentation and check documentation ID commands
+        run: |
+          ./cmd/build_readthedocs
+          ./cmd/gen_next_doc_id doc/feature_topic
+          ./cmd/gen_next_doc_id doc/use_case
+          ./cmd/gen_next_doc_id doc/task_ref
+      - name: Coverage
+        run: |
+          venv/bin/coverage erase --rcfile=gconf/coveragerc.ini
+          venv/bin/coverage run --rcfile=gconf/coveragerc.ini --module pytest src/metaprimer/test/
+          venv/bin/coverage run --rcfile=gconf/coveragerc.ini --module pytest src/protoprimer/test/
+          venv/bin/coverage combine --rcfile=gconf/coveragerc.ini
+          venv/bin/coverage report --rcfile=gconf/coveragerc.ini
